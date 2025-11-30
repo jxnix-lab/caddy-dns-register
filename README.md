@@ -23,90 +23,72 @@ Build Caddy with this module using xcaddy:
 ```bash
 xcaddy build \
   --with github.com/jxnix-lab/caddy-dns-register \
-  --with github.com/jxnix-lab/caddy-dns-technitium \
-  --with github.com/caddy-dns/cloudflare \
-  --with github.com/caddy-dns/rfc2136
+  --with github.com/caddy-dns/cloudflare
 ```
 
 ## Usage
 
 ### Caddyfile Syntax
 
+All configuration goes inside a single `dns_register` global option block:
+
 ```caddyfile
 {
-    # Optional: Set unique owner ID for this Caddy instance
     dns_register {
-        owner_id caddy-n5
-    }
+        # Optional: Set unique owner ID for this Caddy instance
+        owner_id my-caddy-instance
 
-    # Define DNS zones and their providers
-    domain lab.jaxon.cloud {
-        dns rfc2136 {
-            server ns1.lab.jaxon.cloud
-            key_name external-dns
-            key_alg hmac-sha256
-            key {$TSIG_SECRET}
+        # Define DNS zones and their providers
+        domain example.com {
+            dns cloudflare {
+                api_token {$CF_API_TOKEN}
+            }
+
+            # Static records
+            record www A 192.0.2.1
+            record api A 192.0.2.1
+            record mail A 192.0.2.2 3600
         }
 
-        # Static records
-        record grafana A 192.168.8.254
-        record prometheus A 192.168.8.254
-    }
+        domain internal.example.com {
+            dns rfc2136 {
+                server ns1.internal.example.com
+                key_name external-dns
+                key_alg hmac-sha256
+                key {$TSIG_SECRET}
+            }
 
-    domain jaxon.cloud {
-        dns technitium {
-            server_url http://192.168.4.54:5380
-            api_token {$TECHNITIUM_API_TOKEN}
+            record grafana A 10.0.0.50
+            record prometheus A 10.0.0.51
         }
-
-        # CNAME for split-horizon
-        record grafana CNAME grafana.lab.jaxon.cloud
-    }
-
-    domain phx.jaxon.cloud {
-        dns cloudflare {$CF_API_TOKEN}
-
-        record uptime-kuma A 85.31.234.30
     }
 }
 
 # Site blocks as usual
-grafana.lab.jaxon.cloud, grafana.jaxon.cloud {
-    reverse_proxy grafana:3000
+www.example.com {
+    reverse_proxy backend:8080
 }
 ```
 
 ### Docker Labels (with caddy-docker-proxy)
 
-**On Caddy container** (define zones once):
+**On Caddy container** (global options):
 ```yaml
 labels:
-  caddy_0:
-  caddy_0.domain_0: lab.jaxon.cloud
-  caddy_0.domain_0.dns: rfc2136 ns1.lab.jaxon.cloud
-  caddy_0.domain_0.dns.key_name: external-dns
-  caddy_0.domain_0.dns.key_alg: hmac-sha256
-  caddy_0.domain_0.dns.key: ${TSIG_SECRET}
-
-  caddy_0.domain_1: jaxon.cloud
-  caddy_0.domain_1.dns: technitium
-  caddy_0.domain_1.dns.server_url: http://192.168.4.54:5380
-  caddy_0.domain_1.dns.api_token: ${TECHNITIUM_API_TOKEN}
+  # Global dns_register config
+  caddy.dns_register.owner_id: my-caddy-instance
+  caddy.dns_register.domain_0: example.com
+  caddy.dns_register.domain_0.dns: cloudflare
+  caddy.dns_register.domain_0.dns.api_token: "{$$CF_API_TOKEN}"
+  caddy.dns_register.domain_0.record_0: "www A 192.0.2.1"
+  caddy.dns_register.domain_0.record_1: "api A 192.0.2.1"
 ```
 
-**On service containers** (add records):
+**On service containers** (reverse proxy):
 ```yaml
 labels:
-  # DNS records
-  caddy_0:
-  caddy_0.domain_0: lab.jaxon.cloud
-  caddy_0.domain_0.1_record: grafana A 192.168.8.254
-  caddy_0.domain_1: jaxon.cloud
-  caddy_0.domain_1.1_record: grafana CNAME grafana.lab.jaxon.cloud
-
-  # Reverse proxy (standard caddy-docker-proxy)
-  caddy_1: grafana.lab.jaxon.cloud, grafana.jaxon.cloud
-  caddy_1.reverse_proxy: "{{upstreams 3000}}"
+  caddy: www.example.com
+  caddy.reverse_proxy: "{{upstreams 8080}}"
 ```
 
 ## Supported Providers
@@ -116,15 +98,15 @@ This module uses [libdns](https://github.com/libdns) providers. Any caddy-dns pr
 - `cloudflare` - Cloudflare API
 - `rfc2136` - RFC2136 Dynamic DNS (TSIG)
 - `route53` - AWS Route 53
-- `technitium` - Technitium DNS HTTP API ([caddy-dns-technitium](https://github.com/jxnix-lab/caddy-dns-technitium))
+- And many more from [caddy-dns](https://github.com/caddy-dns)
 
 ## Record Ownership
 
 Records are tracked using TXT registry records (similar to external-dns):
 
 ```
-grafana.lab.jaxon.cloud.         A    192.168.8.254
-_cdr.grafana.lab.jaxon.cloud.    TXT  "owner=caddy-n5,heritage=caddy-dns-register"
+www.example.com.         A    192.0.2.1
+_cdr.www.example.com.    TXT  "owner=my-caddy-instance,heritage=caddy-dns-register"
 ```
 
 This allows:

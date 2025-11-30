@@ -174,11 +174,24 @@ func (a *App) reconcileDomain(domain *Domain) error {
 		}
 	}
 
+	// Log what we're about to do with actual record names
+	createNames := make([]string, len(toCreate))
+	for i, r := range toCreate {
+		createNames[i] = r.Name + ":" + r.Type
+	}
+	updateNames := make([]string, len(toUpdate))
+	for i, r := range toUpdate {
+		updateNames[i] = r.Name + ":" + r.Type
+	}
+
 	a.logger.Info("reconciling DNS records",
 		zap.String("zone", domain.Zone),
 		zap.Int("create", len(toCreate)),
 		zap.Int("update", len(toUpdate)),
-		zap.Int("delete", len(toDelete)))
+		zap.Int("delete", len(toDelete)),
+		zap.Strings("create_records", createNames),
+		zap.Strings("update_records", updateNames),
+		zap.Strings("delete_records", toDelete))
 
 	// Apply deletions
 	if hasDeleter && len(toDelete) > 0 {
@@ -200,7 +213,7 @@ func (a *App) reconcileDomain(domain *Domain) error {
 					zap.String("type", rec.Type),
 					zap.Error(err))
 			} else {
-				a.logger.Debug("deleted record",
+				a.logger.Info("deleted record",
 					zap.String("name", rec.Name),
 					zap.String("type", rec.Type))
 			}
@@ -226,7 +239,7 @@ func (a *App) reconcileDomain(domain *Domain) error {
 					zap.String("type", rec.Type),
 					zap.Error(err))
 			} else {
-				a.logger.Debug("created record",
+				a.logger.Info("created record",
 					zap.String("name", rec.Name),
 					zap.String("type", rec.Type),
 					zap.String("value", rec.Value))
@@ -246,7 +259,7 @@ func (a *App) reconcileDomain(domain *Domain) error {
 					zap.String("type", rec.Type),
 					zap.Error(err))
 			} else {
-				a.logger.Debug("updated record",
+				a.logger.Info("updated record",
 					zap.String("name", rec.Name),
 					zap.String("type", rec.Type),
 					zap.String("value", rec.Value))

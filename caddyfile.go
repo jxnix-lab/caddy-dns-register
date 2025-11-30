@@ -11,7 +11,6 @@ import (
 
 func init() {
 	httpcaddyfile.RegisterGlobalOption("dns_register", parseGlobalDNSRegister)
-	httpcaddyfile.RegisterGlobalOption("domain", parseGlobalDomain)
 }
 
 // parseGlobalDNSRegister parses the dns_register global option block.
@@ -20,11 +19,37 @@ func init() {
 //
 //	dns_register {
 //	    owner_id <id>
+//	    domain <zone> {
+//	        dns <provider> {
+//	            <provider-specific-options>
+//	        }
+//	        record <name> <type> <value> [<ttl>]
+//	    }
+//	}
+//
+// Example:
+//
+//	dns_register {
+//	    owner_id my-caddy-instance
+//	    domain example.com {
+//	        dns cloudflare {
+//	            api_token {$CF_API_TOKEN}
+//	        }
+//	        record www A 192.0.2.1
+//	        record mail A 192.0.2.2 3600
+//	    }
 //	}
 func parseGlobalDNSRegister(d *caddyfile.Dispenser, existingVal any) (any, error) {
 	app := &App{}
 	if existingVal != nil {
-		app = existingVal.(*App)
+		switch v := existingVal.(type) {
+		case *App:
+			app = v
+		case httpcaddyfile.App:
+			if err := json.Unmarshal(v.Value, app); err != nil {
+				return nil, d.Errf("failed to unmarshal existing app: %v", err)
+			}
+		}
 	}
 
 	for d.Next() {
@@ -36,114 +61,94 @@ func parseGlobalDNSRegister(d *caddyfile.Dispenser, existingVal any) (any, error
 				}
 				app.OwnerID = d.Val()
 
+			case "domain":
+				// Parse domain block
+				if !d.NextArg() {
+					return nil, d.ArgErr()
+				}
+				zone := d.Val()
+
+				domain := &Domain{Zone: zone}
+
+				for innerNesting := d.Nesting(); d.NextBlock(innerNesting); {
+					switch d.Val() {
+					case "dns":
+						// Parse DNS provider
+						if !d.NextArg() {
+							return nil, d.ArgErr()
+						}
+						providerName := d.Val()
+
+						providerConfig := map[string]any{
+							"name": providerName,
+						}
+
+						// Parse provider block if present
+						for providerNesting := d.Nesting(); d.NextBlock(providerNesting); {
+							key := d.Val()
+							if !d.NextArg() {
+								return nil, d.ArgErr()
+							}
+							value := d.Val()
+							providerConfig[key] = value
+						}
+
+						providerJSON, err := json.Marshal(providerConfig)
+						if err != nil {
+							return nil, d.Errf("marshaling DNS provider config: %v", err)
+						}
+						domain.DNSProviderRaw = providerJSON
+
+					case "record":
+						// Parse record: <name> <type> <value> [<ttl>]
+						rec := &Record{}
+
+						if !d.NextArg() {
+							return nil, d.ArgErr()
+						}
+						rec.Name = d.Val()
+
+						if !d.NextArg() {
+							return nil, d.ArgErr()
+						}
+						rec.Type = d.Val()
+
+						if !d.NextArg() {
+							return nil, d.ArgErr()
+						}
+						rec.Value = d.Val()
+
+						// Optional TTL
+						if d.NextArg() {
+							ttl, err := strconv.Atoi(d.Val())
+							if err != nil {
+								return nil, d.Errf("invalid TTL: %s", d.Val())
+							}
+							rec.TTL = ttl
+						}
+
+						domain.Records = append(domain.Records, rec)
+
+					default:
+						return nil, d.Errf("unrecognized domain option: %s", d.Val())
+					}
+				}
+
+				app.Domains = append(app.Domains, domain)
+
 			default:
 				return nil, d.Errf("unrecognized dns_register option: %s", d.Val())
 			}
 		}
 	}
 
-	return app, nil
-}
-
-// parseGlobalDomain parses domain blocks in the global options.
-//
-// Syntax:
-//
-//	domain <zone> {
-//	    dns <provider> {
-//	        <provider-specific-options>
-//	    }
-//	    record <name> <type> <value> [<ttl>]
-//	}
-func parseGlobalDomain(d *caddyfile.Dispenser, existingVal any) (any, error) {
-	app := &App{}
-	if existingVal != nil {
-		app = existingVal.(*App)
-	}
-
-	for d.Next() {
-		// Get zone name
-		if !d.NextArg() {
-			return nil, d.ArgErr()
-		}
-		zone := d.Val()
-
-		domain := &Domain{Zone: zone}
-
-		for nesting := d.Nesting(); d.NextBlock(nesting); {
-			switch d.Val() {
-			case "dns":
-				// Parse DNS provider
-				if !d.NextArg() {
-					return nil, d.ArgErr()
-				}
-				providerName := d.Val()
-
-				// Build provider config
-				providerConfig := map[string]any{
-					"name": providerName,
-				}
-
-				// Parse provider block if present
-				for innerNesting := d.Nesting(); d.NextBlock(innerNesting); {
-					key := d.Val()
-					if !d.NextArg() {
-						return nil, d.ArgErr()
-					}
-					value := d.Val()
-					providerConfig[key] = value
-				}
-
-				// Marshal to JSON for Caddy's module loader
-				providerJSON, err := json.Marshal(providerConfig)
-				if err != nil {
-					return nil, d.Errf("marshaling DNS provider config: %v", err)
-				}
-				domain.DNSProviderRaw = providerJSON
-
-			case "record":
-				// Parse record: <name> <type> <value> [<ttl>]
-				rec := &Record{}
-
-				if !d.NextArg() {
-					return nil, d.ArgErr()
-				}
-				rec.Name = d.Val()
-
-				if !d.NextArg() {
-					return nil, d.ArgErr()
-				}
-				rec.Type = d.Val()
-
-				if !d.NextArg() {
-					return nil, d.ArgErr()
-				}
-				rec.Value = d.Val()
-
-				// Optional TTL
-				if d.NextArg() {
-					ttl, err := strconv.Atoi(d.Val())
-					if err != nil {
-						return nil, d.Errf("invalid TTL: %s", d.Val())
-					}
-					rec.TTL = ttl
-				}
-
-				domain.Records = append(domain.Records, rec)
-
-			default:
-				return nil, d.Errf("unrecognized domain option: %s", d.Val())
-			}
-		}
-
-		app.Domains = append(app.Domains, domain)
-	}
-
-	return app, nil
+	return httpcaddyfile.App{
+		Name:  "dns_register",
+		Value: caddyconfig.JSON(app, nil),
+	}, nil
 }
 
 // UnmarshalCaddyfile implements caddyfile.Unmarshaler for App.
-// This allows the app to be configured via JSON adapter as well.
 func (a *App) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 	for d.Next() {
 		for nesting := d.Nesting(); d.NextBlock(nesting); {
@@ -223,28 +228,6 @@ func (a *App) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 	}
 
 	return nil
-}
-
-// parseCaddyfile is an adapter to allow parsing Caddyfile into the JSON config.
-func parseCaddyfile(d *caddyfile.Dispenser, existingVal any) (any, error) {
-	app := &App{}
-	if existingVal != nil {
-		var ok bool
-		app, ok = existingVal.(*App)
-		if !ok {
-			return nil, d.Errf("existing value is not *App")
-		}
-	}
-
-	err := app.UnmarshalCaddyfile(d)
-	if err != nil {
-		return nil, err
-	}
-
-	return httpcaddyfile.App{
-		Name:  "dns_register",
-		Value: caddyconfig.JSON(app, nil),
-	}, nil
 }
 
 // Interface guards

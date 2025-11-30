@@ -25,7 +25,7 @@ func TestIntegration_Reconcile(t *testing.T) {
 
 	zone := os.Getenv("TECHNITIUM_TEST_ZONE")
 	if zone == "" {
-		zone = "lab.jaxon.cloud"
+		zone = "example.com"
 	}
 
 	// Create provider
